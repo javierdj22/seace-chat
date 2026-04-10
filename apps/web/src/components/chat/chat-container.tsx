@@ -3,6 +3,7 @@
 import { useChat } from "ai/react";
 import { useState, useRef, useEffect } from "react";
 import { Send, Loader2, Trash2, CheckCircle2 } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./message-bubble";
@@ -20,8 +21,10 @@ export function ChatContainer() {
       api: "/api/chat",
       maxSteps: 5,
     });
-  
+
   const [onlyQuoteable, setOnlyQuoteable] = useState(false);
+  const searchParams = useSearchParams();
+  const initialSearchProcessed = useRef(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -29,6 +32,17 @@ export function ChatContainer() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  useEffect(() => {
+    const query = searchParams.get("search");
+    if (query && !initialSearchProcessed.current && messages.length === 0) {
+      initialSearchProcessed.current = true;
+      const prompt = query === "ultimas"
+        ? "Muestra las últimas contrataciones públicas publicadas"
+        : query;
+      append({ role: "user", content: prompt });
+    }
+  }, [searchParams, messages.length, append]);
 
   function handleViewDetail(id: number) {
     append({
@@ -101,11 +115,10 @@ export function ChatContainer() {
             <button
               type="button"
               onClick={() => setOnlyQuoteable(!onlyQuoteable)}
-              className={`px-3 py-2.5 rounded-xl border flex items-center gap-2 whitespace-nowrap text-[10px] sm:text-xs font-bold transition-all shadow-sm ${
-                onlyQuoteable 
-                  ? "bg-green-600 border-green-700 text-white shadow-green-100/50" 
-                  : "bg-white border-slate-200 text-slate-500 hover:border-green-300 hover:text-green-600"
-              }`}
+              className={`px-3 py-2.5 rounded-xl border flex items-center gap-2 whitespace-nowrap text-[10px] sm:text-xs font-bold transition-all shadow-sm ${onlyQuoteable
+                ? "bg-green-600 border-green-700 text-white shadow-green-100/50"
+                : "bg-white border-slate-200 text-slate-500 hover:border-green-300 hover:text-green-600"
+                }`}
               title="Solo contrataciones vigentes y cotizables"
             >
               <CheckCircle2 className={`size-4 ${onlyQuoteable ? "text-white" : "text-slate-300"}`} />
@@ -116,9 +129,9 @@ export function ChatContainer() {
                 value={input}
                 onChange={handleInputChange}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && onlyQuoteable && input.trim() && !input.toLowerCase().includes("cotiza")) {
+                  if (e.key === "Enter" && input.trim()) {
                     e.preventDefault();
-                    append({ role: "user", content: `${input} (Deben ser contrataciones vigentes y aptas para cotizar)` });
+                    append({ role: "user", content: input });
                     setInput("");
                   }
                 }}
@@ -132,9 +145,9 @@ export function ChatContainer() {
                 disabled={isLoading || !input.trim()}
                 className="absolute right-1.5 top-1/2 -translate-y-1/2 size-8 rounded-lg"
                 onClick={(e) => {
-                  if (onlyQuoteable && input.trim() && !input.toLowerCase().includes("cotiza")) {
+                  if (input.trim()) {
                     e.preventDefault();
-                    append({ role: "user", content: `${input} (Deben ser contrataciones vigentes y aptas para cotizar)` });
+                    append({ role: "user", content: input });
                     setInput("");
                   }
                 }}
