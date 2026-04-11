@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1775869771355,
+      "tag": "0000_soft_clea",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1775869900000,
+      "tag": "0001_payload_seace_legacy",
+      "breakpoints": true
+    }
+  ]
+}

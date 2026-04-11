@@ -3,7 +3,6 @@ import { cookies } from "next/headers";
 import { db, eq, and, desc } from "@repo/db";
 import { seaceDrafts } from "@repo/db/schema";
 import crypto from "crypto";
-import { getContractDetail as getPublicContractDetail } from "@/lib/seace/client";
 export const dynamic = "force-dynamic";
 
 // ─────────────────────────────────────────────────────────────────────
@@ -17,6 +16,8 @@ interface LoginResult {
   razonSocial?: string;
   email?: string;
 }
+
+const isDevelopment = process.env.NODE_ENV === "development";
 
 async function forceFreshSeaceLogin(): Promise<LoginResult> {
   const cookieStore = await cookies();
@@ -137,40 +138,27 @@ export async function GET(req: Request) {
     if (!id_archivo) return NextResponse.json({ error: "id_archivo requerido" }, { status: 400 });
 
     const login = await forceFreshSeaceLogin();
-    
-    let resFile: Response;
-    let hdrs: any = {};
-
-    if (!login.token) {
-        // Modo GUEST
-        console.log(`[SEACE Proxy] Modo GUEST: Descargando archivo público ${id_archivo}`);
-        hdrs = { "Accept": "application/json", "client-s8uit": JSON.stringify({ terminal: "127.0.0.1" }) };
-        resFile = await fetch(
-          `https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/archivo/archivos/descargar-archivo-contrato/${id_archivo}`,
-          { method: "GET", headers: hdrs }
-        );
-    } else {
-        // Modo LOGUEADO
-        hdrs = seaceHeaders(login.token, id_contrato || "0");
-        resFile = await fetch(
-          `https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos/descargar-archivo-contrato/${id_archivo}`,
-          { method: "GET", headers: hdrs }
-        );
-
-        if (resFile.status === 401) {
-          const retry = await forceFreshSeaceLogin();
-          if (retry.token) {
-            hdrs["Authorization"] = `Bearer ${retry.token}`;
-            resFile = await fetch(
-              `https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos/descargar-archivo-contrato/${id_archivo}`,
-              { method: "GET", headers: hdrs }
-            );
-          }
-        }
-    }
+    if (!login.token) return NextResponse.json({ error: login.error }, { status: 401 });
 
     try {
-      if (!resFile.ok) return NextResponse.json({ error: "No se pudo descargar el archivo de SEACE (verifique si es público)" }, { status: resFile.status });
+      const hdrs: any = seaceHeaders(login.token, id_contrato || "0");
+      let resFile = await fetch(
+        `https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos/descargar-archivo-contrato/${id_archivo}`,
+        { method: "GET", headers: hdrs }
+      );
+
+      if (resFile.status === 401) {
+        const retry = await forceFreshSeaceLogin();
+        if (retry.token) {
+          hdrs["Authorization"] = `Bearer ${retry.token}`;
+          resFile = await fetch(
+            `https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos/descargar-archivo-contrato/${id_archivo}`,
+            { method: "GET", headers: hdrs }
+          );
+        }
+      }
+
+      if (!resFile.ok) return NextResponse.json({ error: "Error al descargar de SEACE" }, { status: resFile.status });
 
       const blob = await resFile.blob();
       const headers = new Headers();
@@ -190,28 +178,40 @@ export async function GET(req: Request) {
     if (!id_contrato) return NextResponse.json({ error: "id_contrato requerido" }, { status: 400 });
 
     const login = await forceFreshSeaceLogin();
-    
-    // Si no hay login, intentamos vía repositorio PÚBLICO
     if (!login.token) {
+      if (!isDevelopment || !login.error?.includes("FALTA_COOKIE")) {
+        return NextResponse.json({ error: login.error }, { status: 401 });
+      }
+
       try {
-        console.log(`[SEACE Proxy] Modo GUEST: Consultando repositorio público para contrato ${id_contrato}`);
-        const publicDetail = await getPublicContractDetail(parseInt(id_contrato));
-        
-        // El repositorio público no suele dar listado de archivos directo via listar-completo
-        // Pero podemos intentar un fetch público de archivos si es posible
-        const publicFilesRes = await fetch(
-            `https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/archivo/archivos/listar-archivos-contrato/${id_contrato}/1`,
-            { method: "GET", headers: { "Accept": "application/json" } }
-        );
-        const publicFiles = publicFilesRes.ok ? await publicFilesRes.json() : [];
+        const [dataCompleto, dataArchivos] = await Promise.all([
+          fetch(
+            `https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/contrataciones/listar-completo?id_contrato=${id_contrato}`,
+            {
+              headers: { Accept: "application/json" },
+              next: { revalidate: 60 },
+            },
+          ).then(async (res) => (res.ok ? res.json() : null)),
+          fetch(
+            `https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos/listar-archivos-contrato/${id_contrato}/1`,
+            {
+              headers: { Accept: "application/json" },
+              next: { revalidate: 60 },
+            },
+          ).then(async (res) => (res.ok ? res.json() : [])),
+        ]);
 
         return NextResponse.json({
-          completo: publicDetail,
-          archivos: publicFiles,
-          isPublic: true
+          completo: dataCompleto,
+          archivos: dataArchivos,
+          mode: "public-dev",
         });
       } catch (e) {
-        return NextResponse.json({ error: "No se pudo obtener el detalle público." }, { status: 401 });
+        console.error("[SEACE Public GET Detail]:", e);
+        return NextResponse.json(
+          { error: "Error al consultar el detalle publico de SEACE" },
+          { status: 500 },
+        );
       }
     }
 

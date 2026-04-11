@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { signIn, signUp } from "@/lib/auth-client";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -21,6 +21,8 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectTo = searchParams.get("redirect") || "/chat";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -62,8 +64,8 @@ export default function LoginPage() {
          }
       }
 
-      // 3. Todo OK, enviar al chat
-      router.push("/chat");
+      // 3. Todo OK, volver a la ruta solicitada o al chat
+      router.push(redirectTo);
     } catch (err) {
       setError("No se pudo contactar con el sistema para validar.");
       setLoading(false);

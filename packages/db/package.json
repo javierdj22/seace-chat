@@ -10,7 +10,8 @@
   "scripts": {
     "db:push": "dotenvx run -f ../../.env -- drizzle-kit push",
     "db:generate": "dotenvx run -f ../../.env -- drizzle-kit generate",
-    "db:migrate": "dotenvx run -f ../../.env -- drizzle-kit migrate"
+    "db:migrate": "dotenvx run -f ../../.env -- drizzle-kit migrate",
+    "db:baseline": "dotenvx run -f ../../.env -- node baseline-drizzle.mjs"
   },
   "dependencies": {
     "drizzle-orm": "^0.39.0",

@@ -1,50 +1,68 @@
 import { streamText } from "ai";
 import { gemini } from "@/lib/ai";
-import { getSeaceTools } from "@/lib/ai/tools";
-import { auth } from "@repo/auth/server";
-import { headers } from "next/headers";
+import { seaceTools } from "@/lib/ai/tools";
 
 export const maxDuration = 60;
 
+const systemPrompt = `Eres un asistente experto en contrataciones publicas del estado peruano. Tu funcion es ayudar a los usuarios a buscar y cotizar las contrataciones menores o iguales a 8 UIT publicadas en el sistema SEACE.
+
+Reglas:
+- Responde siempre en espanol
+- Cuando el usuario pida buscar contrataciones, usa la herramienta searchContracts con los filtros apropiados
+- REGLA ESTRICTA: SOLO debes usar 'searchContracts' una (1) vez por mensaje de usuario para buscar. NO llames ningun otro servicio a menos que se te pida especificamente.
+- PROHIBIDO llamar a 'getContractDetail' iterativamente. SOLO usalo si el usuario te pide explicitamente "Ver detalles tecnicos" o "Dame detalles de X".
+- Si el usuario te pide "mis borradores", "ordenes guardadas como borradores", "filtro de guardados" o cualquier referencia a tus borradores locales, usa la herramienta 'listSavedDrafts' para obtener su historial y muestralos.
+- El ano actual es ${new Date().getFullYear()}
+- Si searchContracts o listSavedDrafts devuelve contracts: [], debes decirselo claramente al usuario. En ese caso debes responder que no encontraste resultados para los filtros solicitados y sugerir una reformulacion breve, por ejemplo ampliar palabra clave, cambiar ano, quitar departamento o cambiar tipo de objeto.
+- Si contracts: [] nunca digas "se encontraron X resultados", aunque exista pagination.total o sourcePagination. Cuando contracts este vacio, la respuesta correcta es que no hubo resultados utiles despues de aplicar los filtros.
+- Cuando muestres resultados de busqueda o borradores, limitate a decir cuantos encontraste y deja que las tarjetas de la UI hagan el trabajo. NO llames a los detalles de cada uno para hacer un resumen.`;
+
 export async function POST(req: Request) {
-  const { messages } = await req.json();
-  const lastMessage = messages[messages.length - 1];
-
-  // Aumento interno (Hidden Prompt Augmentation): 
-  // Si el último mensaje es del usuario y es una búsqueda (no es pregunta directa), 
-  // le inyectamos la instrucción interna para priorizar lo cotizable, pero SOLO para el motor de la IA.
-  if (lastMessage?.role === "user") {
-    const content = lastMessage.content.toLowerCase();
-    const isQuestion = content.includes("?") || content.includes("qué es") || content.includes("cómo");
-    const isHistorySearch = content.includes("pasado") || content.includes("vencido") || content.includes("2024") || content.includes("2023");
-    
-    if (!isQuestion && !isHistorySearch) {
-      lastMessage.content += " (Priorizar resultados vigentes y aptos para cotizar)";
+  try {
+    if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+      return Response.json(
+        { error: "Falta GOOGLE_GENERATIVE_AI_API_KEY en el entorno del servidor." },
+        { status: 500 },
+      );
     }
+
+    const { messages } = await req.json();
+
+    const result = streamText({
+      model: gemini,
+      system: systemPrompt,
+      messages,
+      tools: seaceTools,
+      maxSteps: 5,
+      onError({ error }) {
+        console.error("[/api/chat stream error]", error);
+      },
+    });
+
+    return result.toDataStreamResponse({
+      getErrorMessage(error) {
+        console.error("[/api/chat response error]", error);
+
+        if (process.env.NODE_ENV === "development") {
+          return error instanceof Error
+            ? error.message
+            : "Error desconocido en /api/chat";
+        }
+
+        return "Ocurrio un error procesando el chat.";
+      },
+    });
+  } catch (error) {
+    console.error("[/api/chat fatal error]", error);
+
+    return Response.json(
+      {
+        error:
+          process.env.NODE_ENV === "development" && error instanceof Error
+            ? error.message
+            : "No se pudo procesar la solicitud del chat.",
+      },
+      { status: 500 },
+    );
   }
-
-  const session = await auth.api.getSession({ headers: await headers() });
-  const isGuest = !session?.user;
-  const userId = session?.user?.id;
-
-  const result = streamText({
-    model: gemini,
-    system: `Eres un asistente experto en SEACE (Perú). Tu ÚNICA función es buscar y mostrar contrataciones de 8 UIT.
-
-${isGuest ? "\nMODO VISITANTE: No dejes que el usuario guarde borradores. Si lo intenta, dile brevemente que debe loguearse.\n" : ""}
-
-FILTROS Y LÍMITES ESTRICTOS:
-1. CANTIDAD: Siempre limita tus búsquedas a un máximo de 5 resultados (page_size: 5). El usuario prefiere ver pocos pero relevantes (3 a 5 registros).
-2. SOLO COTIZABLES POR DEFECTO: Si el usuario te pide una búsqueda general ("lo último", "búscame algo", "ver contratos") sin especificar estados pasados, SIEMPRE usa el filtro solo_cotizables: true. Queremos que el usuario vea lo que puede cotizar hoy.
-3. ESTADOS PASADOS: Solo busca contratos culminados o en evaluación si el usuario lo pide explícitamente (ej: "busca procesos culminados de 2024").
-4. SILENCIO TOTAL: NO escribas textos introductorios, explicaciones ni resúmenes. Si vas a mostrar contratos, tu respuesta de texto debe ser un string VACÍO "".
-5. SOLO TARJETAS: Deja que la interfaz visual hable por sí sola.
-
-Tu objetivo: Ser eficiente, mostrar entre 3 y 5 resultados vigentes y cotizables, y no decir nada de texto.`,
-    messages,
-    tools: getSeaceTools(userId),
-    maxSteps: 5,
-  });
-
-  return result.toDataStreamResponse();
 }
