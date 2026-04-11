@@ -1,0 +1,22 @@
+﻿<svg width="1080" height="1920" viewBox="0 0 1080 1920" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1080" height="1920" fill="#F8FAFC"/>
+  <rect x="78" y="96" width="924" height="1728" rx="72" fill="white" stroke="#E2E8F0" stroke-width="12"/>
+  <rect x="144" y="166" width="164" height="52" rx="26" fill="#0F172A"/>
+  <text x="190" y="199" fill="white" font-size="24" font-family="Arial, sans-serif" font-weight="700" letter-spacing="4">SEACE</text>
+  <text x="144" y="276" fill="#0F172A" font-size="56" font-family="Arial, sans-serif" font-weight="700">Chat de contrataciones</text>
+  <text x="144" y="332" fill="#475569" font-size="28" font-family="Arial, sans-serif">Busqueda, detalle tecnico y flujo de cotizacion en movil.</text>
+  <rect x="144" y="414" width="792" height="286" rx="40" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="6"/>
+  <rect x="184" y="458" width="72" height="72" rx="24" fill="#0F172A"/>
+  <text x="184" y="594" fill="#0F172A" font-size="48" font-family="Arial, sans-serif" font-weight="700">Encuentra contrataciones rapido</text>
+  <text x="184" y="640" fill="#475569" font-size="26" font-family="Arial, sans-serif">Busca procesos, revisa detalle tecnico y continua tu flujo.</text>
+  <rect x="144" y="756" width="380" height="170" rx="32" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="6"/>
+  <rect x="556" y="756" width="380" height="170" rx="32" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="6"/>
+  <rect x="144" y="962" width="792" height="200" rx="36" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="6"/>
+  <rect x="184" y="1012" width="600" height="42" rx="21" fill="#E2E8F0"/>
+  <rect x="816" y="998" width="76" height="76" rx="24" fill="#0F172A"/>
+  <rect x="144" y="1260" width="792" height="220" rx="40" fill="#0F172A"/>
+  <text x="184" y="1344" fill="white" font-size="34" font-family="Arial, sans-serif" font-weight="700">contrataciones de lambayeque para bienes</text>
+  <rect x="144" y="1528" width="792" height="196" rx="40" fill="#F1F5F9"/>
+  <text x="184" y="1610" fill="#0F172A" font-size="34" font-family="Arial, sans-serif">No se encontraron resultados con esos filtros.</text>
+  <text x="184" y="1660" fill="#64748B" font-size="26" font-family="Arial, sans-serif">Prueba ampliando la palabra clave o quitando el departamento.</text>
+</svg>
