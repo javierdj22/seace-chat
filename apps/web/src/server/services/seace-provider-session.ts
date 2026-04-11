@@ -63,3 +63,16 @@ export async function getSeaceProviderSession(sessionId: string) {
 export async function deleteSeaceProviderSession(sessionId: string) {
   await db.delete(seaceProviderSession).where(eq(seaceProviderSession.id, sessionId));
 }
+
+export async function attachSeaceProviderSessionToUser(params: {
+  sessionId: string;
+  userId: string;
+}) {
+  await db
+    .update(seaceProviderSession)
+    .set({
+      userId: params.userId,
+      updatedAt: new Date(),
+    })
+    .where(eq(seaceProviderSession.id, params.sessionId));
+}

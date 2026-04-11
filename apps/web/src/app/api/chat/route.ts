@@ -4,7 +4,13 @@ import { auth } from "@repo/auth/server";
 import { gemini } from "@/lib/ai";
 import { seaceTools } from "@/lib/ai/tools";
 import { apiError } from "@/server/http/api-response";
-import { consumeAiCredit } from "@/server/services/ai-usage";
+import { getOrCreateGuestIdentity } from "@/server/security/guest-identity";
+import {
+  ensureAiCreditAvailable,
+  ensureGuestAiCreditAvailable,
+  recordAiUsage,
+  recordGuestAiUsage,
+} from "@/server/services/ai-usage";
 import { checkRateLimit, getRequestClientIp } from "@/server/security/rate-limit";
 
 export const maxDuration = 60;
@@ -41,21 +47,31 @@ export async function POST(req: Request) {
       return apiError("Falta GOOGLE_GENERATIVE_AI_API_KEY en el entorno del servidor.", 500);
     }
 
-    const authSession = await auth.api.getSession({
-      headers: await headers(),
-    });
+    const [authSession, guestIdentity] = await Promise.all([
+      auth.api.getSession({
+        headers: await headers(),
+      }),
+      getOrCreateGuestIdentity(),
+    ]);
 
-    if (authSession?.user?.id) {
-      const credit = await consumeAiCredit({
-        userId: authSession.user.id,
-        endpoint: "/api/chat",
-        model: "gemini",
-        metadata: { ip: clientIp },
-      });
+    const userId = authSession?.user?.id ?? null;
+    const guestId = userId ? null : guestIdentity.guestId;
+
+    if (userId) {
+      const credit = await ensureAiCreditAvailable(userId, 1);
 
       if (!credit.allowed) {
         return apiError(
           `Has alcanzado tu limite mensual de consultas de IA. Tu cuota se reinicia el ${credit.resetAt.toISOString().slice(0, 10)}.`,
+          402,
+        );
+      }
+    } else if (guestId) {
+      const guestCredit = await ensureGuestAiCreditAvailable(guestId, 1);
+
+      if (!guestCredit.allowed) {
+        return apiError(
+          "Ya usaste tus 2 consultas de prueba. Inicia sesion o registrate para seguir usando el chat y acceder a una cuota mensual completa.",
           402,
         );
       }
@@ -73,6 +89,53 @@ export async function POST(req: Request) {
       messages,
       tools: seaceTools,
       maxSteps: 5,
+      async onFinish({ usage, finishReason }) {
+        try {
+          if (userId) {
+            const recorded = await recordAiUsage({
+              userId,
+              endpoint: "/api/chat",
+              model: "gemini-2.5-flash",
+              usage,
+              metadata: {
+                ip: clientIp,
+                finishReason,
+                audience: "authenticated",
+              },
+            });
+
+            if (recorded.overageCredits > 0) {
+              console.warn("[/api/chat quota overage]", {
+                userId,
+                overageCredits: recorded.overageCredits,
+                chargedCredits: recorded.chargedCredits,
+              });
+            }
+          } else if (guestId) {
+            const recorded = await recordGuestAiUsage({
+              guestId,
+              endpoint: "/api/chat",
+              model: "gemini-2.5-flash",
+              usage,
+              metadata: {
+                ip: clientIp,
+                finishReason,
+                audience: "guest",
+              },
+            });
+
+            if (recorded.overageCredits > 0) {
+              console.warn("[/api/chat guest quota overage]", {
+                guestId,
+                overageCredits: recorded.overageCredits,
+                chargedCredits: recorded.chargedCredits,
+              });
+            }
+          }
+        } catch (error) {
+          console.error("[/api/chat usage recording error]", error);
+        }
+      },
       onError({ error }) {
         console.error("[/api/chat stream error]", error);
       },
