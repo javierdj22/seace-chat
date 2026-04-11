@@ -10,7 +10,112 @@ import {
   listContractStates,
 } from "@/lib/seace/client";
 
+function extractYearFromSeaceDate(value?: string | null): number | null {
+  if (!value) return null;
+
+  const match = value.match(/(\d{4})/);
+  if (!match) return null;
+
+  const year = Number.parseInt(match[1], 10);
+  return Number.isNaN(year) ? null : year;
+}
+
+const DEPARTMENT_NAMES: Record<number, string> = {
+  1: "amazonas",
+  2: "ancash",
+  3: "apurimac",
+  4: "arequipa",
+  5: "ayacucho",
+  6: "cajamarca",
+  7: "callao",
+  8: "cusco",
+  9: "huancavelica",
+  10: "huanuco",
+  11: "ica",
+  12: "junin",
+  13: "la libertad",
+  14: "lambayeque",
+  15: "lima",
+  16: "loreto",
+  17: "madre de dios",
+  18: "moquegua",
+  19: "pasco",
+  20: "piura",
+  21: "puno",
+  22: "san martin",
+  23: "tacna",
+  24: "tumbes",
+  25: "ucayali",
+};
+
+const MAX_DEPARTMENT_VALIDATIONS = 8;
+const DEPARTMENT_VALIDATION_CONCURRENCY = 3;
+
+function normalizeText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function objectContainsText(value: unknown, target: string): boolean {
+  if (value == null) return false;
+
+  if (typeof value === "string") {
+    return normalizeText(value).includes(target);
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((item) => objectContainsText(item, target));
+  }
+
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some((item) =>
+      objectContainsText(item, target),
+    );
+  }
+
+  return false;
+}
+
+async function filterContractsByDepartment(
+  contracts: any[],
+  requestedDepartment: string,
+): Promise<any[]> {
+  const candidates = contracts.slice(0, MAX_DEPARTMENT_VALIDATIONS);
+  const validated: any[] = [];
+
+  for (let index = 0; index < candidates.length; index += DEPARTMENT_VALIDATION_CONCURRENCY) {
+    const batch = candidates.slice(index, index + DEPARTMENT_VALIDATION_CONCURRENCY);
+    const batchResults = await Promise.all(
+      batch.map(async (contract) => {
+        try {
+          const detail = await getContractDetail(contract.id);
+          return objectContainsText(detail, requestedDepartment) ? contract : null;
+        } catch (error) {
+          console.warn(
+            "=== [AI TOOL EXECUTING] DEPARTMENT VALIDATION ERROR ===",
+            {
+              contractId: contract.id,
+              requestedDepartment,
+              error,
+            },
+          );
+          return null;
+        }
+      }),
+    );
+
+    validated.push(...batchResults.filter(Boolean));
+  }
+
+  return validated;
+}
+
 export const seaceTools = {
+  // SEACE a veces devuelve resultados de otros años aunque se envíe el filtro.
+  // Normalizamos la fecha publicada para reforzar el filtro localmente.
+  // Formatos esperados: "09/04/2026 09:59:45" o similares.
   listSavedDrafts: tool({
     description: "Lista todos los borradores de cotizaciones (guardados pero no enviados) o enviados por el usuario en la base de datos local.",
     parameters: z.object({}),
@@ -74,6 +179,12 @@ Filtros disponibles:
         .describe("Resultados por página (max 50)"),
     }),
     execute: async (params) => {
+      const hasLocalPostFiltering =
+        Boolean(params.anio) ||
+        Boolean(params.objeto_contrato) ||
+        Boolean(params.departamento) ||
+        Boolean(params.solo_cotizables);
+
       // Fuerza bruta: Si la palabra clave contiene el año (ej. CM-236-2026-SERVIR), obligamos a que busque en ese año.
       if (params.palabra_clave) {
         const matchInfo = params.palabra_clave.match(/-(\d{4})-/);
@@ -123,6 +234,7 @@ Filtros disponibles:
       let processedData = mergedData.map((c: any) => ({
         id: c.idContrato,
         idCotizacion: c.idCotizacion,
+        idObjetoContrato: c.idObjetoContrato,
         idEstadoCotiza: c.idEstadoCotiza,
         nomEstadoCotiza: c.nomEstadoCotiza,
         numero: c.desContratacion,
@@ -137,18 +249,100 @@ Filtros disponibles:
         puedesCotizar: c.cotizar,
       }));
 
+      if (params.anio) {
+        const beforeYearFilter = processedData.length;
+        processedData = processedData.filter((c: any) => {
+          const detectedYear = extractYearFromSeaceDate(c.fechaPublicacion);
+          return detectedYear === null || detectedYear === params.anio;
+        });
+
+        console.log("=== [AI TOOL EXECUTING] LOCAL YEAR FILTER ===", {
+          requestedYear: params.anio,
+          before: beforeYearFilter,
+          after: processedData.length,
+        });
+      }
+
+      if (params.objeto_contrato) {
+        const beforeObjectFilter = processedData.length;
+        processedData = processedData.filter(
+          (c: any) =>
+            c.idObjetoContrato == null ||
+            c.idObjetoContrato === params.objeto_contrato,
+        );
+
+        console.log("=== [AI TOOL EXECUTING] LOCAL OBJECT FILTER ===", {
+          requestedObject: params.objeto_contrato,
+          before: beforeObjectFilter,
+          after: processedData.length,
+        });
+      }
+
+      if (params.departamento && DEPARTMENT_NAMES[params.departamento]) {
+        const requestedDepartment = DEPARTMENT_NAMES[params.departamento];
+        const beforeDepartmentFilter = processedData.length;
+        const validatedResults = await filterContractsByDepartment(
+          processedData,
+          requestedDepartment,
+        );
+        processedData = validatedResults;
+
+        console.log("=== [AI TOOL EXECUTING] LOCAL DEPARTMENT FILTER ===", {
+          requestedDepartment,
+          before: beforeDepartmentFilter,
+          after: processedData.length,
+          validatedCandidates: Math.min(
+            beforeDepartmentFilter,
+            MAX_DEPARTMENT_VALIDATIONS,
+          ),
+          concurrency: DEPARTMENT_VALIDATION_CONCURRENCY,
+        });
+      }
+
       // Si pide solo cotizables, descartamos los no vigentes/no cotizables
       if (params.solo_cotizables) {
         processedData = processedData.filter((c: any) => c.puedesCotizar === true);
       }
 
+      const rawPagination = result.pageable
+        ? {
+            page: result.pageable.pageNumber,
+            pageSize: result.pageable.pageSize,
+            total: result.pageable.totalElements,
+          }
+        : { page: 1, pageSize: 10, total: 0 };
+
+      const effectivePagination = hasLocalPostFiltering
+        ? {
+            ...rawPagination,
+            total: processedData.length,
+            pageSize: processedData.length || rawPagination.pageSize,
+          }
+        : rawPagination;
+
+      const emptyResultHint =
+        processedData.length === 0
+          ? {
+              emptyReason: hasLocalPostFiltering
+                ? "filtered_out_after_local_validation"
+                : "no_results_from_source",
+              userMessageHint:
+                "No se encontraron resultados utiles con los filtros solicitados. Sugiere ampliar palabra clave, cambiar ano, quitar departamento o ajustar tipo de objeto.",
+            }
+          : null;
+
       return {
         contracts: processedData,
-        pagination: result.pageable ? {
-          page: result.pageable.pageNumber,
-          pageSize: result.pageable.pageSize,
-          total: result.pageable.totalElements,
-        } : { page: 1, pageSize: 10, total: 0 },
+        pagination: effectivePagination,
+        sourcePagination: rawPagination,
+        filtersApplied: {
+          localPostFiltering: hasLocalPostFiltering,
+          anio: params.anio ?? null,
+          objeto_contrato: params.objeto_contrato ?? null,
+          departamento: params.departamento ?? null,
+          solo_cotizables: params.solo_cotizables ?? null,
+        },
+        ...emptyResultHint,
       };
     },
   }),

@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
+    "dev": "dotenvx run -f ../../.env -- next dev",
+    "build": "dotenvx run -f ../../.env -- next build",
+    "start": "dotenvx run -f ../../.env -- next start"
   },
   "dependencies": {
     "@ai-sdk/google": "^1.2.22",
@@ -28,6 +28,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@dotenvx/dotenvx": "^1.52.0",
     "@tailwindcss/postcss": "^4.1.18",
     "@types/node": "^22.19.9",
     "@types/react": "^19.2.13",

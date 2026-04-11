@@ -19,6 +19,10 @@ function ToolResult({
   if ((toolName === "searchContracts" || toolName === "listSavedDrafts") && result && typeof result === "object") {
     const data = result as any;
     const rawContracts = data.contracts || data.data || [];
+    const emptyHint =
+      rawContracts.length === 0 && typeof data.userMessageHint === "string"
+        ? data.userMessageHint
+        : null;
     
     // Mapear los contratos para que tengan la estructura que espera ContractCard
     const mappedContracts = rawContracts.map((c: any) => ({
@@ -55,11 +59,18 @@ function ToolResult({
     });
 
     return (
-      <ContractList
-        contracts={mappedContracts}
-        pagination={data.pagination || data.pageable || { page: 1, pageSize: rawContracts.length, total: rawContracts.length }}
-        onViewDetail={onViewDetail}
-      />
+      <div className="space-y-3">
+        {emptyHint && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {emptyHint}
+          </div>
+        )}
+        <ContractList
+          contracts={mappedContracts}
+          pagination={data.pagination || data.pageable || { page: 1, pageSize: rawContracts.length, total: rawContracts.length }}
+          onViewDetail={onViewDetail}
+        />
+      </div>
     );
   }
 

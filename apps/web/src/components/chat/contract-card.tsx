@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import {
   Card,
   CardHeader,
@@ -10,7 +11,7 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Building2, Calendar, FileText, Save, LayoutTemplate, Eye, X, Info, FileDown } from "lucide-react";
+import { Building2, Calendar, FileText, Save, LayoutTemplate, Eye, X, Info, FileDown, LogIn, ShieldAlert } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 import { ContractDetailModal } from "./contract-detail-modal";
 
@@ -370,6 +371,10 @@ function extractDocs(raw: any): any[] {
   return [];
 }
 
+function isSeaceAuthError(error: string) {
+  return error.includes("FALTA_COOKIE") || error.includes("OSCE_RECHAZO");
+}
+
 function CotizacionModal({
   contract,
   onClose,
@@ -489,6 +494,8 @@ function CotizacionModal({
   const items = data ? extractItems(data.items) : [];
   const rtmList = data ? extractRtm(data) : [];
   const docs = data ? extractDocs(data) : [];
+  const needsSeaceLogin = isSeaceAuthError(error);
+  const loginHref = `/login?redirect=${encodeURIComponent("/chat")}`;
 
   const calcTotal = () =>
     items.reduce((s: number, it: any, i: number) => {
@@ -606,14 +613,45 @@ function CotizacionModal({
             </div>
           )}
 
-          {error && (
+          {error && !needsSeaceLogin && (
             <div className="m-4 text-sm border-l-4 border-red-500 bg-red-50 text-red-700 p-4 font-medium flex flex-col gap-2">
               <span>{error}</span>
-              {(error.includes("FALTA_COOKIE") || error.includes("OSCE_RECHAZO")) && (
-                <a href="/login" className="text-blue-600 underline text-xs font-bold">
-                  ⚠️ Parece que su sesión de SEACE ha expirado. Haga clic aquí para volver a iniciar sesión.
-                </a>
-              )}
+            </div>
+          )}
+
+          {needsSeaceLogin && (
+            <div className="m-4 rounded-xl border border-amber-200 bg-gradient-to-br from-amber-50 to-white p-5 shadow-sm">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 rounded-full bg-amber-100 p-2 text-amber-700">
+                  <ShieldAlert className="size-5" />
+                </div>
+                <div className="flex-1 space-y-2">
+                  <h3 className="text-sm font-bold text-slate-800">
+                    Inicia sesión para continuar con esta cotización
+                  </h3>
+                  <p className="text-sm text-slate-600">
+                    Para cargar tus datos de proveedor y seguir con el proceso, primero necesitamos validar tu acceso de SEACE.
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Después del inicio de sesión volverás al chat y podrás retomar esta contratación.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2 pt-2">
+                    <Link
+                      href={loginHref}
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 transition-colors"
+                    >
+                      <LogIn className="size-4" />
+                      Iniciar sesión y continuar
+                    </Link>
+                    <button
+                      onClick={onClose}
+                      className="inline-flex items-center justify-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                    >
+                      Ahora no
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 

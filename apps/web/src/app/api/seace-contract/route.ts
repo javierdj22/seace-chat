@@ -17,6 +17,8 @@ interface LoginResult {
   email?: string;
 }
 
+const isDevelopment = process.env.NODE_ENV === "development";
+
 async function forceFreshSeaceLogin(): Promise<LoginResult> {
   const cookieStore = await cookies();
   const creds = cookieStore.get("seace_creds")?.value;
@@ -176,7 +178,42 @@ export async function GET(req: Request) {
     if (!id_contrato) return NextResponse.json({ error: "id_contrato requerido" }, { status: 400 });
 
     const login = await forceFreshSeaceLogin();
-    if (!login.token) return NextResponse.json({ error: login.error }, { status: 401 });
+    if (!login.token) {
+      if (!isDevelopment || !login.error?.includes("FALTA_COOKIE")) {
+        return NextResponse.json({ error: login.error }, { status: 401 });
+      }
+
+      try {
+        const [dataCompleto, dataArchivos] = await Promise.all([
+          fetch(
+            `https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/contrataciones/listar-completo?id_contrato=${id_contrato}`,
+            {
+              headers: { Accept: "application/json" },
+              next: { revalidate: 60 },
+            },
+          ).then(async (res) => (res.ok ? res.json() : null)),
+          fetch(
+            `https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos/listar-archivos-contrato/${id_contrato}/1`,
+            {
+              headers: { Accept: "application/json" },
+              next: { revalidate: 60 },
+            },
+          ).then(async (res) => (res.ok ? res.json() : [])),
+        ]);
+
+        return NextResponse.json({
+          completo: dataCompleto,
+          archivos: dataArchivos,
+          mode: "public-dev",
+        });
+      } catch (e) {
+        console.error("[SEACE Public GET Detail]:", e);
+        return NextResponse.json(
+          { error: "Error al consultar el detalle publico de SEACE" },
+          { status: 500 },
+        );
+      }
+    }
 
     try {
       const hdrs = seaceHeaders(login.token, id_contrato);
