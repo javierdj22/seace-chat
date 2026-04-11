@@ -31,20 +31,22 @@ export function ContractList({
   onViewDetail,
 }: ContractListProps) {
   const isEmpty = contracts.length === 0;
+  const hasMorePages =
+    !!pagination && !isEmpty && (pagination.page * pagination.pageSize) < pagination.total;
 
   return (
     <div className="space-y-3">
       {pagination && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between text-xs text-muted-foreground bg-slate-50 border border-slate-100 rounded-lg py-2 px-3">
-          <span>
+        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs shadow-sm">
+          <p className="font-medium text-slate-600">
             {isEmpty
               ? "No se encontraron contrataciones con los filtros aplicados."
-              : `Mostrando ${contracts.length} de ${pagination.total.toLocaleString()} resultados (pagina ${pagination.page})`}
-          </span>
-          {!isEmpty && (pagination.page * pagination.pageSize) < pagination.total && (
-            <span className="font-medium text-slate-500 mt-1 sm:mt-0 italic">
-              (Pide al chat "Siguiente pagina" para continuar navegando)
-            </span>
+              : `Mostrando ${contracts.length} de ${pagination.total.toLocaleString()} resultados en la pagina ${pagination.page}.`}
+          </p>
+          {hasMorePages && (
+            <p className="mt-1 text-[11px] text-slate-500">
+              Pide al chat "Siguiente pagina" para seguir navegando.
+            </p>
           )}
         </div>
       )}

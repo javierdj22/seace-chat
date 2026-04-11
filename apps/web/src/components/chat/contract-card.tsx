@@ -11,7 +11,7 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Building2, Calendar, FileText, Save, LayoutTemplate, Eye, X, Info, FileDown, LogIn, ShieldAlert } from "lucide-react";
+import { Building2, Calendar, FileText, Save, LayoutTemplate, Eye, X, Info, FileDown, LogIn, ShieldAlert, Package } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 import { ContractDetailModal } from "./contract-detail-modal";
 
@@ -83,7 +83,7 @@ export function ContractCard({
 
   return (
     <>
-      <Card className="gap-3 py-4 hover:shadow-md transition-shadow relative">
+      <Card className="relative gap-3 rounded-[24px] border-slate-200 bg-white py-4 shadow-sm transition-shadow hover:shadow-md">
         <CardHeader className="pb-0">
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2">
@@ -126,17 +126,17 @@ export function ContractCard({
             )}
           </div>
         </CardContent>
-        <CardFooter className="flex items-center justify-between gap-2 border-t pt-3 mt-3">
+        <CardFooter className="mt-3 flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-center sm:justify-between">
           <button
             onClick={() => setIsDetailOpen(true)}
-            className="text-xs text-blue-600 bg-blue-50 border border-blue-100 rounded px-2.5 py-1.5 hover:bg-blue-100 flex items-center gap-1.5 transition-colors font-medium shadow-sm"
+            className="flex h-11 w-full items-center justify-center gap-1.5 rounded-2xl border border-blue-100 bg-blue-50 px-4 text-xs font-medium text-blue-700 shadow-sm transition-colors hover:bg-blue-100 sm:h-10 sm:w-auto"
           >
             <Info className="size-3.5" /> Ver detalle técnico
           </button>
           {contract.puedesCotizar && !hasDraft && (
             <button
               onClick={() => setIsOpen(true)}
-              className="inline-flex items-center gap-1 rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 transition-colors"
+              className="inline-flex h-11 w-full items-center justify-center gap-1 rounded-2xl bg-green-600 px-4 text-xs font-medium text-white transition-colors hover:bg-green-700 sm:h-10 sm:w-auto"
             >
               <LayoutTemplate className="size-3" /> Cotizar
             </button>
@@ -144,7 +144,7 @@ export function ContractCard({
           {hasDraft && (
             <button
               onClick={() => setIsOpen(true)}
-              className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition-colors"
+              className="inline-flex h-11 w-full items-center justify-center gap-1 rounded-2xl bg-blue-600 px-4 text-xs font-medium text-white transition-colors hover:bg-blue-700 sm:h-10 sm:w-auto"
             >
               <Eye className="size-3" /> Ver borrador
             </button>
@@ -582,10 +582,10 @@ function CotizacionModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-2 sm:p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-xl w-full max-w-5xl max-h-[95vh] flex flex-col shadow-2xl overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 animate-in fade-in duration-200">
+      <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-white shadow-2xl sm:max-h-[95vh] sm:max-w-5xl sm:rounded-[28px]">
         {/* ── Header ── */}
-        <div className="px-4 sm:px-5 py-2 sm:py-3 border-b flex justify-between items-center bg-amber-50">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-amber-50 px-4 py-3 sm:px-5 sm:py-3">
           <div>
             <h2 className="text-base font-bold text-amber-900">
               Registro de la cotización
@@ -603,7 +603,7 @@ function CotizacionModal({
         </div>
 
         {/* ── Body scrollable ── */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto bg-slate-50/40">
           {loading && (
             <div className="flex flex-col items-center justify-center h-48 gap-3 text-amber-600 animate-pulse">
               <LayoutTemplate className="size-10" />
@@ -656,7 +656,7 @@ function CotizacionModal({
           )}
 
           {data && !loading && (
-            <div className="p-5 space-y-6 text-gray-800">
+            <div className="space-y-5 p-4 text-gray-800 sm:p-5 sm:space-y-6">
 
               {/* ─── CABECERA DE INSTRUCCIONES ─── */}
               <section className="border rounded-lg overflow-hidden">
@@ -695,7 +695,86 @@ function CotizacionModal({
                     Seleccione los ítems a los cuales enviará su cotización
                   </span>
                 </div>
-                <div className="overflow-x-auto border rounded-lg">
+                <div className="space-y-3 sm:hidden">
+                  {items.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-8 text-center text-sm italic text-slate-400">
+                      No se detectaron items.
+                    </div>
+                  ) : (
+                    items.map((it: any, i: number) => {
+                      const k = getItKey(it, i);
+                      const up = itemPrices[k] ?? it.precioUnitario ?? 0;
+                      const qty = it.cantidad || 1;
+                      const tot = up * qty;
+                      return (
+                        <div key={i} className={`rounded-2xl border border-slate-200 bg-white p-4 shadow-sm ${!itemChecks[k] ? "opacity-50" : ""}`}>
+                          <div className="mb-3 flex items-center justify-between">
+                            <span className="text-xs font-semibold text-slate-400">Item {i + 1}</span>
+                            <input
+                              type="checkbox"
+                              checked={itemChecks[k] ?? true}
+                              onChange={(e) =>
+                                setItemChecks((p) => ({
+                                  ...p,
+                                  [k]: e.target.checked,
+                                }))
+                              }
+                              className="size-5"
+                            />
+                          </div>
+                          <div className="space-y-3">
+                            <div>
+                              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Descripcion</p>
+                              <p className="mt-1 text-sm font-medium text-slate-700">
+                                {it.descripcionItem || it.descObjeto || it.descripcion || "Item"}
+                              </p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="rounded-2xl bg-slate-50 px-3 py-2">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Unidad</p>
+                                <p className="mt-1 text-sm text-slate-700">{it.unidadMedida || it.siglaUM || "SERVICIO"}</p>
+                              </div>
+                              <div className="rounded-2xl bg-slate-50 px-3 py-2">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Cantidad</p>
+                                <p className="mt-1 text-sm text-slate-700">{qty}</p>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="rounded-2xl bg-slate-50 px-3 py-2">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Moneda</p>
+                                <p className="mt-1 text-sm text-slate-700">{it.moneda || it.siglaMoneda || "SOLES"}</p>
+                              </div>
+                              <div className="rounded-2xl bg-slate-50 px-3 py-2">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Total</p>
+                                <p className="mt-1 text-sm font-semibold text-slate-700">{tot.toFixed(2)}</p>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                                Precio unitario
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                placeholder="0.00"
+                                className="mt-1 h-11 w-full rounded-2xl border border-amber-300 bg-white px-3 text-right text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                                value={itemPrices[k] ?? ""}
+                                onChange={(e) =>
+                                  setItemPrices((p) => ({
+                                    ...p,
+                                    [k]: parseFloat(e.target.value) || 0,
+                                  }))
+                                }
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                <div className="hidden overflow-x-auto rounded-lg border sm:block">
                   <table className="w-full text-xs">
                     <thead className="bg-gray-100 border-b">
                       <tr>
@@ -807,7 +886,57 @@ function CotizacionModal({
                 <h3 className="text-sm font-bold mb-3">
                   Registro de Requerimientos Técnicos Mínimos
                 </h3>
-                <div className="overflow-x-auto border rounded-xl shadow-sm bg-white">
+                <div className="space-y-3 sm:hidden">
+                  {rtmList.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-8 text-center text-sm italic text-slate-400">
+                      No se detectaron RTM.
+                    </div>
+                  ) : (
+                    rtmList.map((rtm: any, i: number) => {
+                      const k = getRtmKey(rtm, i);
+                      return (
+                        <div key={i} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                          <div className="mb-3 flex items-center justify-between">
+                            <span className="text-xs font-semibold text-slate-400">RTM {i + 1}</span>
+                            <Package className="size-4 text-amber-600" />
+                          </div>
+                          <div className="space-y-3">
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">Descripcion</p>
+                              <p className="mt-1 text-sm font-medium text-slate-700">
+                                {rtm.nomRtm || rtm.desRtm || rtm.descripcion || "Requerimiento Tecnico"}
+                              </p>
+                            </div>
+                            <div className="rounded-2xl bg-slate-50 px-3 py-2">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">RTM solicitado</p>
+                              <p className="mt-1 text-sm text-slate-700">
+                                {rtm.valor || rtm.valorConRtm || rtm.valorSolicitado || rtm.desRtmValor || "-"}
+                              </p>
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
+                                RTM ofertado
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="Escriba su RTM"
+                                className="mt-1 h-11 w-full rounded-2xl border border-slate-300 bg-white px-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-500/20"
+                                value={rtmValues[k] ?? ""}
+                                onChange={(e) =>
+                                  setRtmValues((p) => ({
+                                    ...p,
+                                    [k]: e.target.value,
+                                  }))
+                                }
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                <div className="hidden overflow-x-auto rounded-xl border shadow-sm bg-white sm:block">
                   <table className="w-full text-xs">
                     <thead className="bg-slate-50 border-b">
                       <tr className="divide-x divide-slate-200">
@@ -910,24 +1039,25 @@ function CotizacionModal({
 
         {/* ── Footer: 3 botones oficiales ── */}
         {!loading && !error && data && (
-          <div className="px-5 py-3 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 bg-gray-50">
+          <div className="sticky bottom-0 border-t bg-white/95 px-4 py-3 backdrop-blur sm:px-5">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <button
               onClick={() => handleSave("borrador")}
               disabled={saving}
-              className="px-5 py-2 text-sm text-white bg-green-600 rounded hover:bg-green-700 transition-colors font-medium disabled:opacity-50"
+              className="h-11 rounded-2xl bg-green-600 px-5 text-sm font-medium text-white transition-colors hover:bg-green-700 disabled:opacity-50"
             >
               {saving ? "Guardando..." : "Guardar borrador"}
             </button>
             <button
               onClick={onClose}
-              className="px-5 py-2 text-sm font-medium border border-gray-300 bg-white rounded hover:bg-gray-50 transition-colors"
+              className="h-11 rounded-2xl border border-gray-300 bg-white px-5 text-sm font-medium transition-colors hover:bg-gray-50"
             >
               ✕ Cancelar
             </button>
             <button
               onClick={() => handleSave("enviar")}
               disabled={sending}
-              className="px-5 py-2 text-sm text-white bg-gray-500 rounded hover:bg-gray-600 transition-colors font-medium disabled:opacity-50 flex items-center gap-1 justify-center"
+              className="flex h-11 items-center justify-center gap-1 rounded-2xl bg-gray-500 px-5 text-sm font-medium text-white transition-colors hover:bg-gray-600 disabled:opacity-50"
             >
               <svg
                 className="size-3.5"
@@ -944,6 +1074,7 @@ function CotizacionModal({
               </svg>
               {sending ? "Enviando..." : "Enviar cotización"}
             </button>
+            </div>
           </div>
         )}
       </div>

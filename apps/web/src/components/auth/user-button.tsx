@@ -23,7 +23,7 @@ export function UserButton() {
 
   return (
     <div className="flex items-center gap-2">
-      <Avatar className="size-7">
+      <Avatar className="size-9">
         <AvatarFallback className="text-xs bg-primary text-primary-foreground">
           {initials}
         </AvatarFallback>
@@ -34,7 +34,7 @@ export function UserButton() {
       <Button
         variant="ghost"
         size="icon"
-        className="size-7"
+        className="size-10 rounded-full"
         onClick={async () => {
           await signOut();
           router.push("/login");
