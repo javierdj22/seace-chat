@@ -1,547 +1,295 @@
-import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { db, eq, and, desc } from "@repo/db";
-import { seaceDrafts } from "@repo/db/schema";
-import crypto from "crypto";
-export const dynamic = "force-dynamic";
+﻿import { NextResponse } from "next/server";
+import { apiError, apiOk } from "@/server/http/api-response";
+import { checkRateLimit, getRequestClientIp } from "@/server/security/rate-limit";
+import {
+  findLatestDraftForUserContract,
+  getDraftById,
+  hasDraftForContract,
+  listDraftsByUser,
+  updateDraftSyncState,
+  upsertDraftForContract,
+} from "@/server/services/seace-drafts";
+import {
+  downloadContractFileFromSeace,
+  fetchContractFlowData,
+  getAuthenticatedContractDetail,
+  getPublicContractDetail,
+  submitQuotationToSeace,
+} from "@/server/services/seace-contracts";
+import {
+  forceFreshSeaceLogin,
+  getPublicSeaceErrorMessage,
+  isMissingSeaceCredentials,
+} from "@/server/services/seace-auth";
+import { buildSeaceQuotationPayload } from "@/server/services/seace-quotation";
 
-// ─────────────────────────────────────────────────────────────────────
-// AUTENTICACIÓN FORZADA CON SEACE (token fresco cada llamada)
-// El JWT de SEACE dura solo ~5 minutos, así que se renegocia siempre.
-// ─────────────────────────────────────────────────────────────────────
-interface LoginResult {
-  token?: string;
-  error?: string;
-  ruc?: string;
-  razonSocial?: string;
-  email?: string;
-}
+export const dynamic = "force-dynamic";
 
 const isDevelopment = process.env.NODE_ENV === "development";
 
-async function forceFreshSeaceLogin(): Promise<LoginResult> {
-  const cookieStore = await cookies();
-  const creds = cookieStore.get("seace_creds")?.value;
+function parseContractId(value: string | null) {
+  if (!value) return null;
 
-  if (!creds) {
-    return { error: "FALTA_COOKIE: No hay credenciales guardadas. Cierra sesión y vuelve a entrar con tu DNI/RUC." };
-  }
-
-  try {
-    const dec = Buffer.from(creds, "base64").toString("utf-8");
-    const parts = dec.split("|||");
-    const username = parts[0];
-    const password = parts.slice(1).join("|||");
-
-    const loginRes = await fetch("https://prod6.seace.gob.pe/v1/s8uit-services/seguridadproveedor/seguridad/validausuariornp", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Origin": "https://prod6.seace.gob.pe",
-        "Referer": "https://prod6.seace.gob.pe/auth-proveedor/login",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      },
-      body: JSON.stringify({ username, password })
-    });
-
-    const loginData = await loginRes.json();
-
-    if (loginRes.ok && loginData.respuesta === true && loginData.token) {
-      // Extraer datos del JWT para armar el payload de proveedor
-      let ruc = username, razonSocial = "", email = "";
-      try {
-        const payloadB64 = loginData.token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-        const jwt = JSON.parse(Buffer.from(payloadB64, "base64").toString("utf-8"));
-        ruc = jwt.nroDocumento || jwt.username || username;
-        razonSocial = jwt.nombreCompleto || "";
-        email = jwt.email || "";
-      } catch { }
-
-      return { token: loginData.token, ruc, razonSocial, email };
-    } else {
-      return { error: `OSCE_RECHAZO: ${loginData.mensaje || "Credenciales inválidas."}` };
-    }
-  } catch (e) {
-    return { error: `ERROR_RED: No se pudo conectar con SEACE: ${e}` };
-  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? null : parsed;
 }
 
-function seaceHeaders(token: string, id_contrato: string) {
-  return {
-    "Authorization": `Bearer ${token}`,
-    "Content-Type": "application/json",
-    "Origin": "https://prod6.seace.gob.pe",
-    "Referer": `https://prod6.seace.gob.pe/cotizacion/cotizaciones/${id_contrato}/registrar-cotizacion`,
-    "Accept": "application/json, text/plain, */*",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "client-s8uit": JSON.stringify({ terminal: "127.0.0.1" })
-  };
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// GET: Trae data completa del contrato (ítems + RTM + docs)
-// También soporta ?action=list-drafts&userId=xxx para listar borradores locales
-// ─────────────────────────────────────────────────────────────────────
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
+  const clientIp = getRequestClientIp(req);
+  const rateLimit = checkRateLimit(`seace-contract:get:${clientIp}`, {
+    maxRequests: 45,
+    windowMs: 60_000,
+  });
 
-  // ── Sub-acción: listar borradores locales desde Postgres ──
+  if (!rateLimit.allowed) {
+    return apiError(
+      `Demasiadas consultas a contrataciones. Intenta nuevamente en ${rateLimit.retryAfterSeconds}s.`,
+      429,
+    );
+  }
+
+  const { searchParams } = new URL(req.url);
   const action = searchParams.get("action");
+
   if (action === "list-drafts") {
     const userId = searchParams.get("userId");
-    if (!userId) return NextResponse.json({ error: "userId requerido" }, { status: 400 });
+    if (!userId) return apiError("userId requerido", 400);
+
     try {
-      const drafts = await db.select().from(seaceDrafts).where(eq(seaceDrafts.userId, userId));
-      return NextResponse.json({ drafts });
-    } catch (e) {
-      console.error("[POSTGRES] Error listando borradores:", e);
-      return NextResponse.json({ drafts: [] });
+      const drafts = await listDraftsByUser(userId);
+      return apiOk({ drafts });
+    } catch (error) {
+      console.error("[SEACE drafts] list failed", error);
+      return apiOk({ drafts: [] });
     }
   }
 
-  // ── Sub-acción: obtener un borrador local específico ──
   if (action === "get-draft") {
     const draftId = searchParams.get("draftId");
-    if (!draftId) return NextResponse.json({ error: "draftId requerido" }, { status: 400 });
+    if (!draftId) return apiError("draftId requerido", 400);
+
     try {
-      const [draft] = await db.select().from(seaceDrafts).where(eq(seaceDrafts.id, draftId));
-      return NextResponse.json({ draft: draft || null });
-    } catch (e) {
-      return NextResponse.json({ draft: null });
+      const draft = await getDraftById(draftId);
+      return apiOk({ draft });
+    } catch (error) {
+      console.error("[SEACE drafts] get failed", error);
+      return apiOk({ draft: null });
     }
   }
-  // ── Sub-acción: verificar si existe borrador para un contrato ──
+
   if (action === "get-draft-for-contract") {
     const userId = searchParams.get("userId");
-    const contractId = searchParams.get("contractId");
-    if (!userId || !contractId) return NextResponse.json({ exists: false });
+    const contractId = parseContractId(searchParams.get("contractId"));
+    if (!userId || contractId == null) return apiOk({ exists: false });
+
     try {
-      const drafts = await db
-        .select({ id: seaceDrafts.id })
-        .from(seaceDrafts)
-        .where(
-          and(
-            eq(seaceDrafts.userId, userId),
-            eq(seaceDrafts.contractId, parseInt(contractId))
-          )
-        )
-        .limit(1);
-      return NextResponse.json({ exists: drafts.length > 0 });
-    } catch (e) {
-      return NextResponse.json({ exists: false });
+      const exists = await hasDraftForContract(userId, contractId);
+      return apiOk({ exists });
+    } catch (error) {
+      console.error("[SEACE drafts] exists check failed", error);
+      return apiOk({ exists: false });
     }
   }
-  // ── Sub-acción: descargar archivo de SEACE (proxy) ──
+
   if (action === "download-file") {
-    const id_contrato = searchParams.get("id_contrato");
-    const id_archivo = searchParams.get("id_archivo");
-    if (!id_archivo) return NextResponse.json({ error: "id_archivo requerido" }, { status: 400 });
+    const contractId = searchParams.get("id_contrato") || "0";
+    const fileId = searchParams.get("id_archivo");
 
-    const login = await forceFreshSeaceLogin();
-    if (!login.token) return NextResponse.json({ error: login.error }, { status: 401 });
-
-    try {
-      const hdrs: any = seaceHeaders(login.token, id_contrato || "0");
-      let resFile = await fetch(
-        `https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos/descargar-archivo-contrato/${id_archivo}`,
-        { method: "GET", headers: hdrs }
-      );
-
-      if (resFile.status === 401) {
-        const retry = await forceFreshSeaceLogin();
-        if (retry.token) {
-          hdrs["Authorization"] = `Bearer ${retry.token}`;
-          resFile = await fetch(
-            `https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos/descargar-archivo-contrato/${id_archivo}`,
-            { method: "GET", headers: hdrs }
-          );
-        }
-      }
-
-      if (!resFile.ok) return NextResponse.json({ error: "Error al descargar de SEACE" }, { status: resFile.status });
-
-      const blob = await resFile.blob();
-      const headers = new Headers();
-      headers.set("Content-Type", resFile.headers.get("Content-Type") || "application/octet-stream");
-      headers.set("Content-Disposition", resFile.headers.get("Content-Disposition") || "attachment");
-      headers.set("Content-Length", blob.size.toString());
-
-      return new NextResponse(blob, { headers });
-    } catch (e) {
-      return NextResponse.json({ error: "Error en proxy de descarga" }, { status: 500 });
-    }
-  }
-
-  // ── Sub-acción: obtener detalle completo de la contratación ──
-  if (action === "get-detail") {
-    const id_contrato = searchParams.get("id_contrato");
-    if (!id_contrato) return NextResponse.json({ error: "id_contrato requerido" }, { status: 400 });
+    if (!fileId) return apiError("id_archivo requerido", 400);
 
     const login = await forceFreshSeaceLogin();
     if (!login.token) {
-      if (!isDevelopment || !login.error?.includes("FALTA_COOKIE")) {
-        return NextResponse.json({ error: login.error }, { status: 401 });
+      return apiError(getPublicSeaceErrorMessage(login.error), 401, login.error);
+    }
+
+    try {
+      const response = await downloadContractFileFromSeace(fileId, contractId, login.token);
+      if (!response.ok) {
+        return apiError("Error al descargar el archivo desde SEACE", response.status);
+      }
+
+      const blob = await response.blob();
+      const headers = new Headers();
+      headers.set("Content-Type", response.headers.get("Content-Type") || "application/octet-stream");
+      headers.set("Content-Disposition", response.headers.get("Content-Disposition") || "attachment");
+      headers.set("Content-Length", blob.size.toString());
+
+      return new NextResponse(blob, { headers });
+    } catch (error) {
+      console.error("[SEACE file] download failed", error);
+      return apiError("Error en el proxy de descarga", 500, error);
+    }
+  }
+
+  if (action === "get-detail") {
+    const contractId = searchParams.get("id_contrato");
+    if (!contractId) return apiError("id_contrato requerido", 400);
+
+    const login = await forceFreshSeaceLogin();
+    if (!login.token) {
+      if (!isDevelopment || !isMissingSeaceCredentials(login.error)) {
+        return apiError(getPublicSeaceErrorMessage(login.error), 401, login.error);
       }
 
       try {
-        const [dataCompleto, dataArchivos] = await Promise.all([
-          fetch(
-            `https://prod6.seace.gob.pe/v1/s8uit-services/buscadorpublico/contrataciones/listar-completo?id_contrato=${id_contrato}`,
-            {
-              headers: { Accept: "application/json" },
-              next: { revalidate: 60 },
-            },
-          ).then(async (res) => (res.ok ? res.json() : null)),
-          fetch(
-            `https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos/listar-archivos-contrato/${id_contrato}/1`,
-            {
-              headers: { Accept: "application/json" },
-              next: { revalidate: 60 },
-            },
-          ).then(async (res) => (res.ok ? res.json() : [])),
-        ]);
-
-        return NextResponse.json({
-          completo: dataCompleto,
-          archivos: dataArchivos,
-          mode: "public-dev",
-        });
-      } catch (e) {
-        console.error("[SEACE Public GET Detail]:", e);
-        return NextResponse.json(
-          { error: "Error al consultar el detalle publico de SEACE" },
-          { status: 500 },
-        );
+        return apiOk(await getPublicContractDetail(contractId));
+      } catch (error) {
+        console.error("[SEACE public detail] failed", error);
+        return apiError("Error al consultar el detalle publico de SEACE", 500, error);
       }
     }
 
     try {
-      const hdrs = seaceHeaders(login.token, id_contrato);
-
-      // 1. Listar completo (Cronograma, CUIs, Ítems)
-      const resCompleto = await fetch(
-        `https://prod6.seace.gob.pe/v1/s8uit-services/contratacion/contrataciones/listar-completo?id_contrato=${id_contrato}`,
-        { method: "GET", headers: hdrs }
-      );
-      let dataCompleto = resCompleto.ok ? await resCompleto.json() : null;
-
-      // 2. Listar archivos (Documentos/TDR)
-      const resArchivos = await fetch(
-        `https://prod6.seace.gob.pe/v1/s8uit-services/archivo/archivos/listar-archivos-contrato/${id_contrato}/1`,
-        { method: "GET", headers: hdrs }
-      );
-      let dataArchivos = resArchivos.ok ? await resArchivos.json() : null;
-
-      return NextResponse.json({
-        completo: dataCompleto,
-        archivos: dataArchivos
-      });
-    } catch (e) {
-      console.error("[SEACE Proxy GET Detail]:", e);
-      return NextResponse.json({ error: "Error al comunicar con SEACE" }, { status: 500 });
+      return apiOk(await getAuthenticatedContractDetail(contractId, login));
+    } catch (error) {
+      console.error("[SEACE detail] failed", error);
+      return apiError("Error al comunicar con SEACE", 500, error);
     }
   }
 
-  // ── Acción principal: consultar SEACE ──
-  const id_contrato = searchParams.get("id_contrato");
-  if (!id_contrato) {
-    return NextResponse.json({ error: "ID de contrato requerido" }, { status: 400 });
+  const contractId = searchParams.get("id_contrato");
+  if (!contractId) {
+    return apiError("ID de contrato requerido", 400);
   }
 
-  // ── Buscar borrador local opcionalmente ──
+  const contractIdNumber = parseContractId(contractId);
   const localUserId = searchParams.get("localUserId");
   let draft: any = null;
-  if (localUserId && id_contrato) {
-    try {
-      console.log(`[POSTGRES] Buscando borrador para User:${localUserId}, Contract:${id_contrato}`);
-      const [d] = await db
-        .select()
-        .from(seaceDrafts)
-        .where(
-          and(
-            eq(seaceDrafts.userId, localUserId),
-            eq(seaceDrafts.contractId, parseInt(id_contrato))
-          )
-        )
-        .orderBy(desc(seaceDrafts.updatedAt))
-        .limit(1);
 
-      if (d) {
-        console.log("[POSTGRES] Borrador encontrado!");
-        draft = d;
-      } else {
-        console.log("[POSTGRES] No hay borrador local.");
-      }
-    } catch (e) {
-      console.error("[POSTGRES] Error crìtico buscando borrador:", e);
+  if (localUserId && contractIdNumber != null) {
+    try {
+      draft = await findLatestDraftForUserContract(localUserId, contractIdNumber);
+    } catch (error) {
+      console.error("[SEACE drafts] latest lookup failed", error);
     }
   }
 
   const login = await forceFreshSeaceLogin();
   if (!login.token) {
-    return NextResponse.json({ error: login.error }, { status: 401 });
+    return apiError(getPublicSeaceErrorMessage(login.error), 401, login.error);
   }
 
   try {
-    // PASO 0: Sincronizar metadatos desde el 'buscador' de SEACE para obtener idCotizacion real
-    let seaceMeta: any = null;
-    try {
-      const contractNum = draft?.numero || searchParams.get("numero");
-      if (contractNum || id_contrato) {
-        const busqUrl = `https://prod6.seace.gob.pe/v1/s8uit-services/contratacion/contrataciones/buscador?anio=${new Date().getFullYear()}&ruc=${login.ruc}&palabra_clave=${encodeURIComponent(contractNum || id_contrato)}&page=1&page_size=5`;
-        const resBusq = await fetch(busqUrl, { method: "GET", headers: seaceHeaders(login.token, "") });
-        if (resBusq.ok) {
-          const busqData = await resBusq.json();
-          const list = busqData.data || busqData.contracts || [];
-          seaceMeta = list.find((c: any) => String(c.idContrato || c.id) === String(id_contrato));
-          if (seaceMeta) console.log(`[SEACE] Metadatos sincronizados desde buscador: IdCotizacion=${seaceMeta.idCotizacion}`);
-        }
-      }
-    } catch (e) {
-      console.error("[SEACE] Error en sincronización inicial de buscador:", e);
-    }
+    const flow = await fetchContractFlowData({
+      contractId,
+      login,
+      contractNumber: draft?.numero || searchParams.get("numero"),
+    });
 
-    const hdrs = seaceHeaders(login.token, id_contrato);
-
-    // Identificar el ID de cotización (del buscador, del searchParam o del borrador local)
-    const id_cotizacion = seaceMeta?.idCotizacion || searchParams.get("id_cotizacion") || (draft as any)?.id_cotizacion || (draft as any)?.idCotizacion;
-
-    if (id_cotizacion) console.log(`[SEACE] Usando IdCotizacion:${id_cotizacion} para sincronizar flujo`);
-
-    // PASO 1: Tocar la página HTML (inicializa WAF/caché de SEACE)
-    try {
-      const tapUrl = id_cotizacion
-        ? `https://prod6.seace.gob.pe/cotizacion/cotizaciones/${id_contrato}/registrar-cotizacion?cotizacion=${id_cotizacion}`
-        : `https://prod6.seace.gob.pe/cotizacion/cotizaciones/${id_contrato}/registrar-cotizacion`;
-      await fetch(tapUrl, { method: "GET", headers: hdrs });
-    } catch { }
-
-    // PASO 2: listar-completo (ítems y cotización)
-    let dataItems: any = null;
-    let urlItems = id_cotizacion
-      ? `https://prod6.seace.gob.pe/v1/s8uit-services/cotizacion/cotizaciones/listar-completo?id_contrato=${id_contrato}&id_cotizacion=${id_cotizacion}`
-      : `https://prod6.seace.gob.pe/v1/s8uit-services/cotizacion/cotizaciones/listar-completo?id_contrato=${id_contrato}`;
-
-    const resItems = await fetch(urlItems, { method: "GET", headers: hdrs });
-    if (resItems.ok) {
-      const body = await resItems.text();
-      if (body) {
-        dataItems = JSON.parse(body);
-        // Si SEACE nos devuelve un ID de cotización que no conocíamos (en uitCotizacionCompletaProjection)
-        const idCotDetectado = dataItems?.uitCotizacionCompletaProjection?.idCotizacion;
-        if (idCotDetectado && !id_cotizacion) {
-          console.log(`[SEACE] IdCotizacion extraído de proyección: ${idCotDetectado}`);
-          // Actualizar para el resto de la ejecución
-          (id_cotizacion as any) = idCotDetectado;
-        }
-      }
-    }
-
-    // PASO 3: listar-completo (contratación técnica: Cronograma, CUIs, etc.)
-    let resContrato = await fetch(
-      id_cotizacion
-        ? `https://prod6.seace.gob.pe/v1/s8uit-services/contratacion/contrataciones/listar-completo?id_contrato=${id_contrato}&id_cotizacion=${id_cotizacion}`
-        : `https://prod6.seace.gob.pe/v1/s8uit-services/contratacion/contrataciones/listar-completo?id_contrato=${id_contrato}`,
-      { method: "GET", headers: hdrs }
-    );
-
-    if (resContrato.status === 401) {
-      const retry = await forceFreshSeaceLogin();
-      if (retry.token) {
-        hdrs["Authorization"] = `Bearer ${retry.token}`;
-        resContrato = await fetch(
-          `https://prod6.seace.gob.pe/v1/s8uit-services/contratacion/contrataciones/listar-completo?id_contrato=${id_contrato}`,
-          { method: "GET", headers: hdrs }
-        );
-      }
-    }
-
-    if (!resContrato.ok) {
-      return NextResponse.json({ error: `SEACE devolvió status ${resContrato.status}` }, { status: resContrato.status });
-    }
-
-    const dataContrato = await resContrato.json();
-
-    // Devolvemos todo junto + datos del proveedor autenticado + borrador si existe
-    return NextResponse.json({
-      contrato: dataContrato,
-      items: dataItems,
-      draft: draft,
+    return apiOk({
+      contrato: flow.contrato,
+      items: flow.items,
+      draft,
+      idCotizacion: flow.idCotizacion || draft?.idCotizacion || null,
       proveedor: {
         codRuc: login.ruc,
         nomRazonSocial: login.razonSocial,
         nomCorreo: login.email,
-      }
+      },
     });
   } catch (error) {
-    console.error("[SEACE Proxy GET]:", error);
-    return NextResponse.json({ error: "Error al comunicar con SEACE" }, { status: 500 });
+    console.error("[SEACE flow] failed", error);
+    return apiError("Error al comunicar con SEACE", 500, error);
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// POST: Arma el payload exacto de SEACE y envía a procesar-por-item
-// Luego guarda todo en Postgres local
-// ─────────────────────────────────────────────────────────────────────
 export async function POST(req: Request) {
+  const clientIp = getRequestClientIp(req);
+  const rateLimit = checkRateLimit(`seace-contract:post:${clientIp}`, {
+    maxRequests: 20,
+    windowMs: 60_000,
+  });
+
+  if (!rateLimit.allowed) {
+    return apiError(
+      `Demasiadas operaciones de cotizacion. Intenta nuevamente en ${rateLimit.retryAfterSeconds}s.`,
+      429,
+    );
+  }
+
   const login = await forceFreshSeaceLogin();
   if (!login.token) {
-    return NextResponse.json({ error: login.error }, { status: 401 });
+    return apiError(getPublicSeaceErrorMessage(login.error), 401, login.error);
   }
 
   try {
     const body = await req.json();
-    const idContrato = body.idContrato;
 
-    // ── Construir el payload EXACTO que SEACE espera ──
-    const seacePayload: any = {
-      fecVigencia: body.vigenciaCotizacion
-        ? (body.vigenciaCotizacion.includes(" ") ? body.vigenciaCotizacion : `${body.vigenciaCotizacion} 00:00:00`)
-        : null,
-      precioTotal: Number(body.precioTotal) || 0,
-      nomCorreo: body.correoContacto || login.email || "",
-      numCelular: body.celularContacto || "",
-      idContratoInvita: body.idContratoInvita || null,
-      uitCotizacionItemRequestList: (body.itemsCotizacion || [])
-        .filter((it: any) => it.seleccionado !== false)
-        .map((it: any) => ({
-          idContratoItem: Number(it.idContratoItem || it.idContratoItemOriginal || it.id),
-          precioTotal: Number(it.precioTotal || 0),
-          precioUnitario: Number(it.precioUnitarioOfertado ?? 0),
-          idCotizacionItem: it.idCotizacionItem || null,
-        })),
-      idContrato: typeof idContrato === "string" ? parseInt(idContrato) : idContrato,
-      uitContratoInvitaRequest: {
-        codRuc: login.ruc || "",
-        nomRazonSocial: login.razonSocial || "",
-        nomCorreo: body.correoContacto || login.email || "",
-        dirDomicilio: "",
-      },
-      uitCotizacionRtmRequestList: (body.rtmList || []).map((rtm: any) => ({
-        idContratoRtmValor: Number(rtm.idContratoRtmValor || rtm.idRtmValor || rtm.id),
-        tipoProceso: rtm.tipoProceso || "C",
-        valor: String(rtm.rtmOfertado || ""),
-        idCotizacionRtm: rtm.idCotizacionRtm || null,
-      })),
-    };
+    if (!body || typeof body !== "object") {
+      return apiError("El cuerpo de la solicitud no es valido.", 400);
+    }
 
-    // Agregar desBienComentario si existe
-    if (body.comentario) seacePayload.desBienComentario = body.comentario;
+    const rawContractId =
+      typeof body.idContrato === "string" ? body.idContrato : String(body.idContrato ?? "");
+    const contractIdNumber = parseContractId(rawContractId);
 
-    console.log("[SEACE] Payload armado para procesar-por-item:", JSON.stringify(seacePayload, null, 2));
+    if (contractIdNumber == null) {
+      return apiError("idContrato requerido", 400);
+    }
 
-    // ── PASO 1: GUARDAR EN POSTGRES LOCAL (ARQUITECTURA PRIMERO) ──
+    const seacePayload = buildSeaceQuotationPayload(body, login);
+
+    console.log("[SEACE quotation] payload prepared", {
+      contractId: contractIdNumber,
+      items: seacePayload.uitCotizacionItemRequestList?.length || 0,
+      rtm: seacePayload.uitCotizacionRtmRequestList?.length || 0,
+      mode: body.modo || "borrador",
+    });
+
     let localSaved = false;
     if (body.localUserId) {
       try {
-        const cId = typeof idContrato === "string" ? parseInt(idContrato) : idContrato;
-        const existing = await db
-          .select()
-          .from(seaceDrafts)
-          .where(and(eq(seaceDrafts.userId, body.localUserId), eq(seaceDrafts.contractId, cId)))
-          .limit(1);
-
-        const draftData: any = {
-          numero: body.numeroContrato || "",
-          entidad: body.entidadContrato || "",
-          descripcion: body.descripcion || "",
-          estado: body.modo === "enviar" ? "POR_ENVIAR" : "BORRADOR2",
-          itemsCotizacion: body.itemsCotizacion || [],
-          rtmList: body.rtmList || [],
-          vigenciaCotizacion: body.vigenciaCotizacion || null,
-          correoContacto: body.correoContacto || null,
-          celularContacto: body.celularContacto || null,
-          precioTotal: body.precioTotal || 0,
+        await upsertDraftForContract({
+          userId: body.localUserId,
+          contractId: contractIdNumber,
+          body,
           payloadSeace: seacePayload,
-          updatedAt: new Date(),
-        };
-
-        // Si ya tenemos un IdCotizacion previo (de SEACE), lo mantenemos localmente
-        const idCotPrevia = body.id_cotizacion || body.idCotizacion || (existing[0] as any)?.idCotizacion;
-        if (idCotPrevia) draftData.idCotizacion = idCotPrevia;
-
-        if (existing.length > 0) {
-          await db.update(seaceDrafts).set(draftData).where(eq(seaceDrafts.id, existing[0].id));
-        } else {
-          await db.insert(seaceDrafts).values({
-            ...draftData,
-            id: `drf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-            userId: body.localUserId,
-            contractId: cId,
-            documentosAdjuntos: [],
-          });
-        }
+        });
         localSaved = true;
-      } catch (dbError: any) {
-        console.error("[POSTGRES] Error fatal salvando localmente:", dbError.message);
-        return NextResponse.json({ ok: false, error: "Error en arquitectura local", details: dbError.message }, { status: 500 });
+      } catch (error) {
+        console.error("[SEACE drafts] local upsert failed", error);
+        return apiError("No se pudo guardar el borrador local", 500, error);
       }
     }
 
-    // ── PASO 2: SINCRONIZAR CON SEACE (CAC) ──
-    const hdrs = seaceHeaders(login.token, String(idContrato));
     let seaceResponse: any = null;
     let seaceOk = false;
     let seaceStatus = 0;
 
     try {
-      let res = await fetch(
-        "https://prod6.seace.gob.pe/v1/s8uit-services/cotizacion/cotizaciones/procesar-por-item",
-        { method: "POST", headers: hdrs, body: JSON.stringify(seacePayload) }
-      );
+      const sync = await submitQuotationToSeace(contractIdNumber, seacePayload, login.token);
+      seaceResponse = sync.response;
+      seaceOk = sync.ok;
+      seaceStatus = sync.status;
 
-      // Reintento con token fresco si 401
-      if (res.status === 401) {
-        const retry = await forceFreshSeaceLogin();
-        if (retry.token) {
-          hdrs["Authorization"] = `Bearer ${retry.token}`;
-          res = await fetch("https://prod6.seace.gob.pe/v1/s8uit-services/cotizacion/cotizaciones/procesar-por-item", {
-            method: "POST", headers: hdrs, body: JSON.stringify(seacePayload)
-          });
-        }
-      }
-
-      seaceOk = res.ok;
-      seaceStatus = res.status;
-      const resText = await res.text();
-      try { seaceResponse = JSON.parse(resText); } catch { seaceResponse = { raw: resText }; }
-
-      // Extraer el ID de cotización generado por SEACE (valorNumerico)
-      const idCotGenerado = seaceResponse?.valorNumerico;
-      if (idCotGenerado) {
-        console.log(`[SEACE] Capturado nuevo IdCotizacion: ${idCotGenerado}`);
-      }
-
-      // Si SEACE aceptó, actualizamos el estado local y guardamos el ID generado
       if (body.localUserId) {
-        const updateData: any = { updatedAt: new Date() };
-        if (seaceOk && body.modo === "enviar") updateData.estado = "ENVIADO";
-        if (idCotGenerado) {
-          // Intentar guardar en la columna que exista (idCotizacion o id_cotizacion)
-          updateData.idCotizacion = idCotGenerado;
-          updateData.id_cotizacion = idCotGenerado;
-        }
-
-        await db.update(seaceDrafts)
-          .set(updateData)
-          .where(and(eq(seaceDrafts.userId, body.localUserId), eq(seaceDrafts.contractId, parseInt(String(idContrato)))));
+        await updateDraftSyncState({
+          userId: body.localUserId,
+          contractId: contractIdNumber,
+          mode: body.modo,
+          seaceOk,
+          idCotizacion: sync.idCotizacion,
+        });
       }
-    } catch (seaceError) {
-      console.error("[SEACE Sync Error]:", seaceError);
-      seaceResponse = { error: "CAC_UNAVAILABLE", details: String(seaceError) };
+    } catch (error) {
+      console.error("[SEACE quotation] sync failed", error);
+      seaceResponse = { error: "CAC_UNAVAILABLE", details: String(error) };
     }
 
-    // ── RESPUESTA: Éxito si se guardó localmente, informando estado de SEACE ──
-    return NextResponse.json({
-      ok: localSaved, // Priorizamos nuestra arquitectura
+    const ok = body.localUserId ? localSaved : seaceOk;
+
+    return apiOk({
+      ok,
       localSaved,
       seaceSynced: seaceOk,
       seaceStatus,
       seaceResponse,
-      message: localSaved ? "Borrador persistido en arquitectura local." : "Error en arquitectura local."
+      message: ok
+        ? "Operacion procesada correctamente."
+        : "No se pudo completar la operacion.",
     });
   } catch (error) {
-    console.error("[SEACE Proxy POST]:", error);
-    return NextResponse.json({ error: "Error al procesar la cotización" }, { status: 500 });
+    console.error("[SEACE quotation] request failed", error);
+    return apiError("Error al procesar la cotizacion", 500, error);
   }
 }

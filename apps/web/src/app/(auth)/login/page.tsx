@@ -64,6 +64,8 @@ export default function LoginPage() {
          }
       }
 
+      await fetch("/api/seace-session/link", { method: "POST" }).catch(() => null);
+
       // 3. Todo OK, volver a la ruta solicitada o al chat
       router.push(redirectTo);
     } catch (err) {

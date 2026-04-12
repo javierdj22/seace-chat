@@ -3,6 +3,7 @@
 import { useSession, signOut } from "@/lib/auth-client";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { AiCreditBadge } from "@/components/auth/ai-credit-badge";
 import { LogOut, User } from "lucide-react";
 import { useRouter } from "next/navigation";
 
@@ -35,6 +36,7 @@ export function UserButton() {
 
   return (
     <div className="flex items-center gap-2">
+      <AiCreditBadge />
       <Avatar className="size-9">
         <AvatarFallback className="text-xs bg-primary text-primary-foreground">
           {initials}

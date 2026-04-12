@@ -1,79 +1,72 @@
-import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
+﻿import { cookies, headers } from "next/headers";
+import { auth } from "@repo/auth/server";
+import { authenticateSeaceCredentials } from "@/server/services/seace-auth";
+import { apiError, apiOk } from "@/server/http/api-response";
+import { checkRateLimit, getRequestClientIp } from "@/server/security/rate-limit";
+import { createSeaceProviderSession } from "@/server/services/seace-provider-session";
 
 export async function POST(req: Request) {
   try {
+    const clientIp = getRequestClientIp(req);
+    const rateLimit = checkRateLimit(`seace-verify:${clientIp}`, {
+      maxRequests: 8,
+      windowMs: 5 * 60_000,
+    });
+
+    if (!rateLimit.allowed) {
+      return apiError(
+        `Demasiados intentos de autenticacion. Intenta nuevamente en ${rateLimit.retryAfterSeconds}s.`,
+        429,
+      );
+    }
+
     const { username, password } = await req.json();
 
     if (!username || !password) {
-      return NextResponse.json(
-        { error: "RUC/DNI y contraseña son requeridos" },
-        { status: 400 }
-      );
+      return apiError("RUC/DNI y contrasena son requeridos.", 400);
     }
 
-    // Petición real a SEACE
-    const seaceRes = await fetch("https://prod6.seace.gob.pe/v1/s8uit-services/seguridadproveedor/seguridad/validausuariornp", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ username, password })
+    const login = await authenticateSeaceCredentials(username, password);
+
+    if (!login.token) {
+      return apiError(login.message || "Credenciales incorrectas.", 401);
+    }
+
+    const cookieStore = await cookies();
+    const authSession = await auth.api.getSession({
+      headers: await headers(),
     });
 
-    const data = await seaceRes.json();
+    cookieStore.set("seace_token", login.token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+    });
 
-    if (!seaceRes.ok || data.respuesta !== true) {
-      return NextResponse.json(
-        { error: data.mensaje || "Credenciales incorrectas" },
-        { status: 401 }
-      );
-    }
+    const session = await createSeaceProviderSession({
+      username,
+      password,
+      userId: authSession?.user?.id || null,
+    });
 
-    // Extraer datos del token JWT (nombreCompleto y email)
-    let name = username;
-    let email = `${username}@seace.gob.pe`;
-    
-    try {
-      if (data.token) {
-         // Guarda el token firmemente en el navegador
-         const cookieStore = await cookies();
-         cookieStore.set("seace_token", data.token, {
-           httpOnly: true,
-           secure: process.env.NODE_ENV === "production",
-           sameSite: "lax",
-           path: "/",
-           maxAge: 60 * 60 * 24 * 30, // 30 días
-         });
+    cookieStore.set("seace_session", session.sessionId, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: session.maxAgeSeconds,
+    });
+    cookieStore.delete("seace_creds");
 
-         const creds = Buffer.from(`${username}|||${password}`).toString("base64");
-         cookieStore.set("seace_creds", creds, {
-           httpOnly: true,
-           secure: process.env.NODE_ENV === "production",
-           sameSite: "lax",
-           path: "/",
-           maxAge: 60 * 60 * 24 * 365, // 1 año auto-login
-         });
-
-         const payloadBase64Url = data.token.split('.')[1];
-         const payloadBase64 = payloadBase64Url.replace(/-/g, '+').replace(/_/g, '/');
-         const payloadJson = Buffer.from(payloadBase64, 'base64').toString('utf-8');
-         const payload = JSON.parse(payloadJson);
-         
-         if (payload.nombreCompleto) name = payload.nombreCompleto;
-         if (payload.email) email = payload.email.toLowerCase();
-      }
-    } catch (e) {
-      console.error("Error procesando el token de SEACE:", e);
-    }
-
-    // Asumimos que SEACE lo validó correctamente y devolvemos los datos para el auto-registro
-    return NextResponse.json({ success: true, name, email });
+    return apiOk({
+      success: true,
+      name: login.razonSocial || username,
+      email: login.email?.toLowerCase() || `${username}@seace.gob.pe`,
+    });
   } catch (error) {
-    console.error("[SEACE_VERIFY_ERROR]:", error);
-    return NextResponse.json(
-      { error: "Error al comunicar con SEACE" },
-      { status: 500 }
-    );
+    console.error("[SEACE_VERIFY_ERROR]", error);
+    return apiError("Error al comunicar con SEACE.", 500, error);
   }
 }
