@@ -11,11 +11,10 @@ import {
   CardFooter,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Building2, Calendar, FileText, Save, LayoutTemplate, Eye, X, Info, FileDown, LogIn, ShieldAlert, Package } from "lucide-react";
+import { Building2, Calendar, FileText, Save, LayoutTemplate, Eye, X, Info, FileDown, LogIn, ShieldAlert, Package, AlertCircle } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 import { useRouter } from "next/navigation";
 import { ContractDetailModal } from "./contract-detail-modal";
-import { LogIn, UserPlus, AlertCircle } from "lucide-react";
 
 interface Contract {
   id: number;
