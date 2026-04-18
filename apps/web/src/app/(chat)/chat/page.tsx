@@ -1,5 +1,6 @@
 ﻿import { UserButton } from "@/components/auth/user-button";
 import { ChatContainer } from "@/components/chat/chat-container";
+import { Suspense } from "react";
 
 export default function ChatPage() {
   return (
@@ -24,7 +25,9 @@ export default function ChatPage() {
           </div>
         </div>
       </header>
-      <ChatContainer />
+      <Suspense fallback={<div className="flex-1 flex items-center justify-center">Cargando chat...</div>}>
+         <ChatContainer />
+      </Suspense>
     </div>
   );
 }

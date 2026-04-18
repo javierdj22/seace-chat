@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useChat } from "ai/react";
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, Loader2, Send, Sparkles, Trash2 } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageBubble } from "./message-bubble";
@@ -74,6 +75,9 @@ export function ChatContainer() {
       },
     });
 
+  const searchParams = useSearchParams();
+  const initialSearchProcessed = useRef(false);
+
   const guestTrialExhausted = quota?.audience === "guest" && quota.remaining <= 0;
 
   useEffect(() => {
@@ -98,6 +102,17 @@ export function ChatContainer() {
 
     append({ role: "user", content: trimmedPrompt });
   }
+
+  useEffect(() => {
+    const query = searchParams.get("search");
+    if (query && !initialSearchProcessed.current && messages.length === 0) {
+      initialSearchProcessed.current = true;
+      const prompt = query === "ultimas"
+        ? "Muestra las últimas contrataciones públicas publicadas"
+        : query;
+      appendWithQuoteable(prompt);
+    }
+  }, [searchParams, messages.length]);
 
   function handleViewDetail(id: number) {
     append({
@@ -267,7 +282,7 @@ export function ChatContainer() {
                 value={input}
                 onChange={handleInputChange}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && onlyQuoteable && input.trim() && !input.toLowerCase().includes("cotiza")) {
+                  if (e.key === "Enter" && input.trim()) {
                     e.preventDefault();
                     appendWithQuoteable(input);
                     setInput("");
@@ -287,7 +302,7 @@ export function ChatContainer() {
                 disabled={isLoading || !input.trim() || guestTrialExhausted}
                 className="absolute bottom-1.5 right-1.5 size-10 rounded-2xl bg-slate-900 text-white hover:bg-slate-800"
                 onClick={(e) => {
-                  if (onlyQuoteable && input.trim() && !input.toLowerCase().includes("cotiza")) {
+                  if (input.trim()) {
                     e.preventDefault();
                     appendWithQuoteable(input);
                     setInput("");

@@ -11,7 +11,19 @@ export function UserButton() {
   const { data: session } = useSession();
   const router = useRouter();
 
-  if (!session?.user) return null;
+  if (!session?.user) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-8 text-xs font-bold"
+        onClick={() => router.push("/login")}
+      >
+        <User className="mr-2 size-3.5" />
+        Iniciar sesión
+      </Button>
+    );
+  }
 
   const initials = session.user.name
     ? session.user.name

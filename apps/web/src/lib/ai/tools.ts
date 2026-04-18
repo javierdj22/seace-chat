@@ -1,6 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { db, or, ilike, eq } from "@repo/db";
+import { db, or, ilike, eq, and } from "@repo/db";
 import { seaceDrafts } from "@repo/db/schema";
 import {
   searchContracts,
@@ -112,16 +112,17 @@ async function filterContractsByDepartment(
   return validated;
 }
 
-export const seaceTools = {
-  // SEACE a veces devuelve resultados de otros años aunque se envíe el filtro.
-  // Normalizamos la fecha publicada para reforzar el filtro localmente.
-  // Formatos esperados: "09/04/2026 09:59:45" o similares.
+// SEACE a veces devuelve resultados de otros años aunque se envíe el filtro.
+// Normalizamos la fecha publicada para reforzar el filtro localmente.
+// Formatos esperados: "09/04/2026 09:59:45" o similares.
+export const getSeaceTools = (userId?: string) => ({
   listSavedDrafts: tool({
     description: "Lista todos los borradores de cotizaciones (guardados pero no enviados) o enviados por el usuario en la base de datos local.",
     parameters: z.object({}),
     execute: async () => {
+      if (!userId) return { contracts: [] };
       try {
-        const drafts = await db.select().from(seaceDrafts);
+        const drafts = await db.select().from(seaceDrafts).where(eq(seaceDrafts.userId, userId));
         return {
           contracts: drafts.map((d) => ({
             id: d.contractId,
@@ -141,15 +142,18 @@ export const seaceTools = {
   }),
   searchContracts: tool({
     description: `Buscar contrataciones públicas en SEACE (contrataciones menores o iguales a 8 UIT del estado peruano).
-Filtros disponibles:
-- palabra_clave: parámetro principal y universal. Sirve para buscar por código de contrato, nomenclatura (ej. CM-448), descripción, sigla, entidad o nombre del servicio/bien. Úsalo siempre como tu principal motor de búsqueda.
+REQUERIMIENTOS:
+- page_size: LIMITA SIEMPRE a un valor entre 3 y 5 (máximo 5) para mostrar solo lo más relevante.
+- solo_cotizables: Por defecto DEBE ser TRUE para ver contrataciones vigentes para cotizar.
+Filtros:
+- palabra_clave: parámetro principal y universal. Sirve para buscar por código de contrato, nomenclatura (ej. CM-448), descripción, sigla, entidad o nombre del servicio/bien.
 - objeto_contrato: 1=Bien, 2=Servicio, 3=Obra, 4=Consultoría de Obra
-- estado_contrato: 2=Vigente, 3=En Evaluación, 4=Culminado
-- solo_cotizables: boolean opcional. Ponlo en true si el usuario PIDE EXPLÍCITAMENTE "solo cotizables", "con cotización activa" o "para cotizar", esto filtrará los que no se puedan cotizar localmente.
-- departamento: ID del departamento (1=Amazonas, 2=Ancash, 3=Apurímac, 4=Arequipa, 5=Ayacucho, 6=Cajamarca, 7=Callao, 8=Cusco, 9=Huancavelica, 10=Huánuco, 11=Ica, 12=Junín, 13=La Libertad, 14=Lambayeque, 15=Lima, 16=Loreto, 17=Madre de Dios, 18=Moquegua, 19=Pasco, 20=Piura, 21=Puno, 22=San Martín, 23=Tacna, 24=Tumbes, 25=Ucayali)
+- estado_contrato: 2=Vigente (default), 3=En Evaluación, 4=Culminado
+- solo_cotizables: boolean (default TRUE). Ponlo en false solo si el usuario pide ver procesos ya cerrados.
+- departamento: ID del departamento (1-25)
 - anio: año de la contratación (default: año actual)
 - page: número de página (default: 1)
-- page_size: resultados por página (default: 10, max: 50)`,
+- page_size: (default 5, max 5)`,
     parameters: z.object({
       palabra_clave: z
         .string()
@@ -200,12 +204,15 @@ Filtros disponibles:
       let localFound: any[] = [];
 
       // Rescate local: Si SEACE oculta el contrato porque ya tiene borrador, lo rescatamos de Postgres
-      if (params.palabra_clave) {
+      if (params.palabra_clave && userId) {
         try {
           const locals = await db.select().from(seaceDrafts).where(
-            or(
-              ilike(seaceDrafts.numero, `%${params.palabra_clave}%`),
-              ilike(seaceDrafts.descripcion, `%${params.palabra_clave}%`)
+            and(
+              or(
+                ilike(seaceDrafts.numero, `%${params.palabra_clave}%`),
+                ilike(seaceDrafts.descripcion, `%${params.palabra_clave}%`)
+              ),
+              eq(seaceDrafts.userId, userId)
             )
           );
           localFound = locals.map(l => ({
@@ -361,10 +368,17 @@ Filtros disponibles:
 
       // Rescate local del detalle
       let localDraft: any = null;
-      try {
-        const drafts = await db.select().from(seaceDrafts).where(eq(seaceDrafts.contractId, idContrato));
-        if (drafts.length > 0) localDraft = drafts[0];
-      } catch (e) { }
+      if (userId) {
+        try {
+          const drafts = await db.select().from(seaceDrafts).where(
+            and(
+              eq(seaceDrafts.contractId, idContrato),
+              eq(seaceDrafts.userId, userId)
+            )
+          );
+          if (drafts.length > 0) localDraft = drafts[0];
+        } catch (e) { }
+      }
 
       return {
         id: c.idContrato,
@@ -429,4 +443,4 @@ Filtros disponibles:
       return states.map((s) => ({ id: s.id, nombre: s.nom }));
     },
   }),
-};
+});

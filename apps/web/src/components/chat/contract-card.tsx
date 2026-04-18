@@ -13,7 +13,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Building2, Calendar, FileText, Save, LayoutTemplate, Eye, X, Info, FileDown, LogIn, ShieldAlert, Package } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
+import { useRouter } from "next/navigation";
 import { ContractDetailModal } from "./contract-detail-modal";
+import { LogIn, UserPlus, AlertCircle } from "lucide-react";
 
 interface Contract {
   id: number;
@@ -57,7 +59,9 @@ export function ContractCard({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [showGuestModal, setShowGuestModal] = useState(false);
   const { data: session } = useSession();
+  const router = useRouter();
 
   // Estado local para cuando el modal guarda un borrador en esta sesión o se detecta asíncronamente
   const [localDraftSaved, setLocalDraftSaved] = useState(false);
@@ -135,7 +139,13 @@ export function ContractCard({
           </button>
           {contract.puedesCotizar && !hasDraft && (
             <button
-              onClick={() => setIsOpen(true)}
+              onClick={() => {
+                if (!session?.user) {
+                  setShowGuestModal(true);
+                  return;
+                }
+                setIsOpen(true);
+              }}
               className="inline-flex h-11 w-full items-center justify-center gap-1 rounded-2xl bg-green-600 px-4 text-xs font-medium text-white transition-colors hover:bg-green-700 sm:h-10 sm:w-auto"
             >
               <LayoutTemplate className="size-3" /> Cotizar
@@ -143,7 +153,13 @@ export function ContractCard({
           )}
           {hasDraft && (
             <button
-              onClick={() => setIsOpen(true)}
+              onClick={() => {
+                if (!session?.user) {
+                  setShowGuestModal(true);
+                  return;
+                }
+                setIsOpen(true);
+              }}
               className="inline-flex h-11 w-full items-center justify-center gap-1 rounded-2xl bg-blue-600 px-4 text-xs font-medium text-white transition-colors hover:bg-blue-700 sm:h-10 sm:w-auto"
             >
               <Eye className="size-3" /> Ver borrador
@@ -168,7 +184,54 @@ export function ContractCard({
           onClose={() => setIsDetailOpen(false)}
         />
       )}
+
+      {showGuestModal && (
+        <GuestLoginModal 
+          onClose={() => setShowGuestModal(false)}
+          onLogin={() => router.push("/login")}
+        />
+      )}
     </>
+  );
+}
+
+function GuestLoginModal({ onClose, onLogin }: { onClose: () => void; onLogin: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-md p-4 animate-in fade-in duration-200">
+      <div className="bg-white rounded-2xl w-full max-w-sm flex flex-col shadow-2xl overflow-hidden border border-slate-200 transform transition-all animate-in zoom-in-95 duration-300">
+        <div className="p-6 text-center space-y-4">
+          <div className="mx-auto size-16 bg-amber-50 rounded-full flex items-center justify-center text-amber-500 mb-2">
+            <AlertCircle className="size-10" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-xl font-bold text-slate-800">Acceso restringido</h3>
+            <p className="text-sm text-slate-500">
+              Para crear cotizaciones, ver borradores o enviar documentos, necesitas identificarte con tu cuenta del RNP/SEACE.
+            </p>
+          </div>
+          
+          <div className="grid grid-cols-1 gap-3 pt-4">
+            <button
+              onClick={onLogin}
+              className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-all shadow-lg shadow-blue-100"
+            >
+              <LogIn className="size-4" />
+              Iniciar sesión ahora
+            </button>
+            <button
+              onClick={onClose}
+              className="w-full py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl transition-all"
+            >
+              Seguir explorando
+            </button>
+          </div>
+          
+          <p className="text-[10px] text-slate-400">
+            Puedes seguir buscando y viendo detalles técnicos de las licitaciones sin iniciar sesión.
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 

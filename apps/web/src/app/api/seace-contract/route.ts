@@ -1,4 +1,4 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { apiError, apiOk } from "@/server/http/api-response";
 import { checkRateLimit, getRequestClientIp } from "@/server/security/rate-limit";
 import {
